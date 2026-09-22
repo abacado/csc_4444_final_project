@@ -194,7 +194,7 @@ button:disabled {
 
 .table-surface {
   position: relative;
-  min-height: 500px;
+  min-height: 640px;
   border-radius: 24px;
   border: 20px solid #7c4d20;
   background: linear-gradient(180deg, var(--table-green), var(--table-green-2));
@@ -225,15 +225,21 @@ button:disabled {
 }
 
 .card {
-  width: 58px;
-  height: 84px;
+  --sprite-cols: 13;
+  --sprite-rows: 4;
+  width: 64px;
+  height: 86px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   border-radius: 10px;
   font-weight: 800;
-  color: #101b2a;
-  background: white;
+  color: transparent;
+  background-color: white;
+  background-image: url('assets/cardsprites.png');
+  background-repeat: no-repeat;
+  background-size: calc(var(--sprite-cols) * 100%) calc(var(--sprite-rows) * 100%);
+  background-position: calc(var(--col, 0) / 12 * 100%) calc(var(--row, 0) / 3 * 100%);
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.14);
   border: 1px solid rgba(0, 0, 0, 0.08);
 }
@@ -250,7 +256,7 @@ button:disabled {
   grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 10px;
   padding: 18px;
-  align-items: center;
+  align-items: end;
 }
 
 .player-seat {
@@ -258,8 +264,8 @@ button:disabled {
   border: 1px solid rgba(255, 255, 255, 0.06);
   border-radius: 16px;
   padding: 10px 12px;
-  min-height: 108px;
-  max-height: 148px;
+  min-height: 210px;
+  max-height: 240px;
 }
 
 .player-seat.current-turn {
@@ -290,6 +296,10 @@ button:disabled {
 .player-bet {
   color: var(--text-soft);
   font-size: 0.9rem;
+}
+
+.player-stack {
+  margin-top: 10px;
 }
 
 .player-state {

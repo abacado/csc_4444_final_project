@@ -27,9 +27,18 @@ function escapeHtml(value) {
   return String(value).replace(/[&<>'"]/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[character]));
 }
 
+// cardsprites.png is a 13-col x 4-row grid: cols are rank 2..A left to right,
+// rows are hearts, clubs, diamonds, spades top to bottom.
+const SPRITE_SUIT_ROW = { hearts: 0, clubs: 1, diamonds: 2, spades: 3 };
+
 function card(cardValue) {
   const hidden = cardValue.label === '??';
-  return `<div class="card ${hidden ? 'hidden' : ''}">${hidden ? '?' : escapeHtml(cardValue.label)}</div>`;
+  if (hidden) {
+    return '<div class="card hidden">?</div>';
+  }
+  const col = cardValue.rank - 2;
+  const row = SPRITE_SUIT_ROW[cardValue.suit];
+  return `<div class="card" style="--col:${col}; --row:${row}" aria-label="${escapeHtml(cardValue.label)}"></div>`;
 }
 
 function renderStackChart(players) {
@@ -65,10 +74,10 @@ function renderState(snapshot) {
     const state = player.folded ? 'Folded' : (player.all_in ? 'All-in' : (turn ? 'Acting' : 'Waiting'));
     return `<div class="player-seat ${turn ? 'current-turn' : ''} ${player.folded ? 'folded' : ''}">
       <div class="player-name">${escapeHtml(player.name)}${snapshot.dealer === player.id ? '<span class="dealer-chip">D</span>' : ''}</div>
+      <div class="player-hole">${(player.hole_cards || []).map(card).join('')}</div>
       <div class="player-stack">Stack: $${player.stack}</div>
       <div class="player-bet">Street bet: $${player.bet}</div>
       <div class="player-state">${state}</div>
-      <div class="player-hole">${(player.hole_cards || []).map(card).join('')}</div>
     </div>`;
   }).join('');
   renderStackChart(players);
