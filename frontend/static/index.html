@@ -3,15 +3,15 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Bayou Poker</title>
+    <title>Poker AI Final Showdown</title>
     <link rel="stylesheet" href="/static/styles.css" />
   </head>
   <body>
     <div class="app-shell">
       <header class="topbar">
         <div>
-          <p class="eyebrow">Louisiana's bot table</p>
-          <h1>Bayou Poker</h1>
+          <p class="eyebrow">CSC 4444 Artificial Intelligence</p>
+          <h1>Poker AI Final Showdown</h1>
         </div>
         <div class="status-panel">
           <span id="phase-badge" class="phase-badge">WAITING</span>
@@ -20,31 +20,33 @@
       </header>
 
       <main class="game-layout">
-        <aside class="panel waiting-room" id="waiting-room">
-          <h2>Live table</h2>
-          <div class="helper-text">
-            Instructor view. AI bots join and play directly through the websocket API; shared table cards appear after betting rounds.
-          </div>
+        <div class="panel waiting-room" id="waiting-room">
           <div class="button-row start-row">
             <button id="start-hand-button" type="button" disabled>Start One Hand</button>
             <button id="start-series-button" class="series-button" type="button" disabled>Run 10 Hands</button>
           </div>
           <div id="series-status" class="series-status">Single-hand mode</div>
-          <div class="stack-chart-heading">Chip stacks</div>
-          <div id="stack-chart" class="stack-chart" aria-label="Bot chip stacks"></div>
-        </aside>
+        </div>
 
-        <section class="table-panel panel">
-          <div class="table-surface">
-            <div class="dealer-mark" id="dealer-mark">Dealer button: None</div>
-            <div id="community-cards" class="community-cards"></div>
-            <div id="players" class="players-grid"></div>
-          </div>
-        </section>
+        <div class="table-row">
+          <aside class="panel chip-stacks-panel" id="chip-stacks-panel">
+            <div class="stack-chart-heading">Chip stacks</div>
+            <div id="stack-chart" class="stack-chart" aria-label="Bot chip stacks"></div>
+          </aside>
+
+          <section class="table-panel panel">
+            <div class="table-surface">
+              <div class="table-pot-text" id="table-pot-text">Pot: $0</div>
+              <div class="table-phase-badge" id="table-phase-text">WAITING</div>
+              <div id="community-cards" class="community-cards"></div>
+              <div id="players" class="players-grid"></div>
+            </div>
+          </section>
+        </div>
       </main>
 
       <section class="table-status panel">
-        <div id="status-message" class="status-message">Connecting to the Bayou Poker table…</div>
+        <div id="status-message" class="status-message">Connecting to the Poker AI Final Showdown table…</div>
       </section>
     </div>
 

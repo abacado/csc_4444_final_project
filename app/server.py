@@ -11,7 +11,7 @@ from app.engine import PokerEngine
 BASE_DIR = Path(__file__).resolve().parent.parent
 STATIC_DIR = BASE_DIR / "frontend" / "static"
 
-app = FastAPI(title="Bayou Poker")
+app = FastAPI(title="Poker AI Final Showdown")
 engine = PokerEngine(starting_stack=1000, small_blind=10, big_blind=20)
 connections: Dict[str, WebSocket] = {}
 spectators: set[WebSocket] = set()
