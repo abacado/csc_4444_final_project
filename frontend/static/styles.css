@@ -236,7 +236,7 @@ button:disabled {
 
 .table-surface {
   position: relative;
-  min-height: 810px;
+  min-height: 880px;
   border-radius: 24px;
   border: 20px solid #7c4d20;
   background: linear-gradient(180deg, var(--table-green), var(--table-green-2));
@@ -277,16 +277,18 @@ button:disabled {
 }
 
 .community-cards .card {
-  width: 100px;
-  height: 134px;
+  /* Exactly 2x the sprite's native 71x95 cell so pixelated scaling stays crisp. */
+  width: 142px;
+  height: 190px;
   border-radius: 14px;
 }
 
 .card {
   --sprite-cols: 13;
   --sprite-rows: 4;
-  width: 64px;
-  height: 86px;
+  /* Native sprite cell size (71x95) - no scaling, so no blur/blockiness. */
+  width: 71px;
+  height: 95px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -298,13 +300,19 @@ button:disabled {
   background-repeat: no-repeat;
   background-size: calc(var(--sprite-cols) * 100%) calc(var(--sprite-rows) * 100%);
   background-position: calc(var(--col, 0) / 12 * 100%) calc(var(--row, 0) / 3 * 100%);
+  image-rendering: crisp-edges;
+  image-rendering: pixelated;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.14);
   border: 1px solid rgba(0, 0, 0, 0.08);
 }
 
 .card.hidden {
-  background: linear-gradient(135deg, #244f7f, #10253d);
-  color: rgba(255,255,255,0.8);
+  /* Cardbacks.png is a 7-col x 5-row grid (71x95 cells); the red back sits
+     in the top-left cell, so the default --col/--row of 0 already points there. */
+  --sprite-cols: 7;
+  --sprite-rows: 5;
+  background-image: url('assets/Cardbacks.png');
+  background-color: white;
 }
 
 .players-grid {
@@ -323,7 +331,7 @@ button:disabled {
   border-radius: 16px;
   padding: 10px 12px;
   width: 100%;
-  height: 284px;
+  height: 296px;
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -443,11 +451,25 @@ button:disabled {
   .players-grid {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
+
+  .community-cards {
+    gap: 8px;
+  }
+
+  .community-cards .card {
+    width: 100px;
+    height: 134px;
+  }
 }
 
 @media (max-width: 560px) {
   .players-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .community-cards .card {
+    width: 71px;
+    height: 95px;
   }
 
   .stack-row {

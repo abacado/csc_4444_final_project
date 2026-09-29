@@ -35,7 +35,7 @@ const SPRITE_SUIT_ROW = { hearts: 0, clubs: 1, diamonds: 2, spades: 3 };
 function card(cardValue) {
   const hidden = cardValue.label === '??';
   if (hidden) {
-    return '<div class="card hidden">?</div>';
+    return '<div class="card hidden" aria-label="face-down card"></div>';
   }
   const col = cardValue.rank - 2;
   const row = SPRITE_SUIT_ROW[cardValue.suit];
@@ -132,7 +132,7 @@ function renderState(snapshot) {
   stateEls.tablePot.textContent = `Pot: $${snapshot.pot}`;
   updateLastActions(snapshot.last_action);
   const community = (snapshot.community_cards || []).map(card).join('');
-  const placeholders = Array.from({ length: Math.max(0, 5 - (snapshot.community_cards || []).length) }, () => '<div class="card hidden">?</div>').join('');
+  const placeholders = Array.from({ length: Math.max(0, 5 - (snapshot.community_cards || []).length) }, () => '<div class="card hidden" aria-label="face-down card"></div>').join('');
   stateEls.community.innerHTML = community + placeholders;
   const players = snapshot.players || [];
   stateEls.players.innerHTML = players.map((player) => {
