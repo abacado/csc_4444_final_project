@@ -1,3 +1,5 @@
+import time
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -10,9 +12,13 @@ def clean_table():
     server.engine = PokerEngine(starting_stack=1000, small_blind=10, big_blind=20)
     server.connections.clear()
     server.spectators.clear()
-    server.series_total = None
-    server.series_completed = 0
-    server.series_active = False
+    server.SHOWDOWN_REVEAL_SECONDS = 0.01
+    server._showdown_reveal_task = None
+    server.ACTION_DELAY_SECONDS = 0.0
+    server.paused = False
+    server.running = False
+    server.MIN_HAND_GAP_SECONDS = 0.01
+    server._next_hand_task = None
 
 
 def test_websocket_rejects_actions_from_an_unseated_connection():
@@ -50,21 +56,44 @@ def test_observer_can_start_a_ready_table_without_taking_a_seat():
             assert len(server.engine.players) == 2
 
 
-def test_instructor_can_start_the_fixed_ten_hand_series():
+def test_start_plays_hands_continuously_until_paused():
+    """Pressing Start (resume) deals without a start_hand message, and once a
+    hand pays out the next one is dealt automatically."""
     with TestClient(server.app) as client:
         with client.websocket_connect("/ws") as instructor, client.websocket_connect("/ws") as bot_one, client.websocket_connect("/ws") as bot_two:
             instructor.send_json({"type": "observe"})
             instructor.receive_json()
             bot_one.send_json({"type": "join", "name": "Bot One", "player_id": "bot-1"})
-            bot_one.receive_json()
+            instructor.receive_json()
             bot_two.send_json({"type": "join", "name": "Bot Two", "player_id": "bot-2"})
-            bot_two.receive_json()
+            state = instructor.receive_json()["payload"]
+            assert state["running"] is False
+            assert state["phase"] == "WAITING"
 
-            instructor.send_json({"type": "start_series"})
-            states = [instructor.receive_json()["payload"] for _ in range(3)]
-            assert any(state["phase"] == "PREFLOP" for state in states)
-            assert server.series_total == 10
-            assert server.series_active is True
+            instructor.send_json({"type": "resume"})
+            state = instructor.receive_json()["payload"]
+            assert state["running"] is True
+            assert state["paused"] is False
+            while state["phase"] != "PREFLOP":
+                state = instructor.receive_json()["payload"]
+            assert state["hand_number"] == 1
+
+            # Bot two folds whenever it is its turn, so hand one ends without
+            # a showdown and the server should deal hand two on its own.
+            sockets = {"bot-1": bot_one, "bot-2": bot_two}
+            sockets[state["current_turn"]].send_json({"type": "action", "action": "fold"})
+            seen_payout = False
+            while state["hand_number"] < 2:
+                state = instructor.receive_json()["payload"]
+                if state["phase"] == "WAITING" and (state["last_action"] or {}).get("type") == "payout":
+                    seen_payout = True
+            assert seen_payout, "observers should see the payout before the next deal"
+            assert state["phase"] == "PREFLOP"
+
+            instructor.send_json({"type": "pause"})
+            state = instructor.receive_json()["payload"]
+            assert state["running"] is True
+            assert state["paused"] is True
 
 
 def test_join_requires_stable_bot_identity():
@@ -72,6 +101,174 @@ def test_join_requires_stable_bot_identity():
         with client.websocket_connect("/ws") as websocket:
             websocket.send_json({"type": "join", "name": "", "player_id": "bot-1"})
             assert websocket.receive_json()["type"] == "error"
+
+
+def test_showdown_reveals_hole_cards_then_pays_out_after_delay():
+    """Drives a full heads-up hand to a contested showdown and checks both
+    halves of the reveal: the broadcast the instant the pot is decided
+    (cards visible, stacks untouched, table still closed to new hands),
+    and the follow-up broadcast once the reveal delay elapses (cards
+    hidden again, stacks paid out, table reopened).
+    """
+    with TestClient(server.app) as client:
+        with client.websocket_connect("/ws") as instructor, client.websocket_connect("/ws") as bot_one, client.websocket_connect("/ws") as bot_two:
+            instructor.send_json({"type": "observe"})
+            instructor.receive_json()
+
+            bot_one.send_json({"type": "join", "name": "Bot One", "player_id": "bot-1"})
+            bot_one.receive_json()
+            instructor.receive_json()
+
+            bot_two.send_json({"type": "join", "name": "Bot Two", "player_id": "bot-2"})
+            bot_two.receive_json()
+            instructor.receive_json()
+
+            instructor.send_json({"type": "start_hand"})
+            state = instructor.receive_json()["payload"]
+            assert state["phase"] == "PREFLOP"
+
+            sockets = {"bot-1": bot_one, "bot-2": bot_two}
+            # Flat-calling every street (a call for zero extra chips behaves
+            # like a check) walks the hand to showdown without any folds.
+            for _ in range(50):
+                if state["phase"] in ("WAITING", "SHOWDOWN"):
+                    break
+                actor = state["current_turn"]
+                sockets[actor].send_json({"type": "action", "action": "call"})
+                state = instructor.receive_json()["payload"]
+            else:
+                pytest.fail("Hand did not reach showdown within 50 actions")
+
+            assert state["phase"] == "SHOWDOWN"
+            assert state["last_action"]["type"] == "payout"
+            assert len(state["community_cards"]) == 5
+            assert state["current_turn"] is None
+            assert not server.engine.can_start_hand()
+            for player in state["players"]:
+                assert all(card["label"] != "??" for card in player["hole_cards"])
+
+            # Stacks in the SHOWDOWN broadcast above are pre-payout; the
+            # follow-up broadcast should add each player's share on top.
+            pre_payout_stacks = {player["id"]: player["stack"] for player in state["players"]}
+            payouts = state["last_action"]["payouts"]
+
+            final_state = instructor.receive_json()["payload"]
+            assert final_state["phase"] == "WAITING"
+            assert final_state["pot"] == 0
+            for player in final_state["players"]:
+                assert all(card["label"] == "??" for card in player["hole_cards"])
+                expected = pre_payout_stacks[player["id"]] + payouts.get(player["id"], 0)
+                assert player["stack"] == expected
+
+
+def test_observer_can_set_game_speed_and_values_are_clamped():
+    with TestClient(server.app) as client:
+        with client.websocket_connect("/ws") as instructor:
+            instructor.send_json({"type": "observe"})
+            assert instructor.receive_json()["payload"]["speed"] == {"action_delay": 0.0, "showdown_reveal": 0.01}
+
+            instructor.send_json({"type": "set_speed", "action_delay": 99, "showdown_reveal": -5})
+            speed = instructor.receive_json()["payload"]["speed"]
+            assert speed == {"action_delay": server.MAX_ACTION_DELAY_SECONDS, "showdown_reveal": 0.0}
+
+            instructor.send_json({"type": "set_speed", "action_delay": "fast"})
+            assert instructor.receive_json()["type"] == "error"
+            assert server.ACTION_DELAY_SECONDS == server.MAX_ACTION_DELAY_SECONDS
+
+
+def test_bots_cannot_change_game_speed():
+    with TestClient(server.app) as client:
+        with client.websocket_connect("/ws") as bot:
+            bot.send_json({"type": "join", "name": "Bot One", "player_id": "bot-1"})
+            bot.receive_json()
+            bot.send_json({"type": "set_speed", "action_delay": 0})
+            assert bot.receive_json() == {"type": "error", "message": "Only an instructor observer may change the game speed"}
+
+
+def test_action_delay_holds_the_next_broadcast():
+    with TestClient(server.app) as client:
+        with client.websocket_connect("/ws") as instructor, client.websocket_connect("/ws") as bot_one, client.websocket_connect("/ws") as bot_two:
+            instructor.send_json({"type": "observe"})
+            instructor.receive_json()
+            bot_one.send_json({"type": "join", "name": "Bot One", "player_id": "bot-1"})
+            bot_one.receive_json()
+            instructor.receive_json()
+            bot_two.send_json({"type": "join", "name": "Bot Two", "player_id": "bot-2"})
+            bot_two.receive_json()
+            instructor.receive_json()
+            instructor.send_json({"type": "start_hand"})
+            state = instructor.receive_json()["payload"]
+
+            server.ACTION_DELAY_SECONDS = 0.2
+            actor = {"bot-1": bot_one, "bot-2": bot_two}[state["current_turn"]]
+            started = time.monotonic()
+            actor.send_json({"type": "action", "action": "call"})
+            instructor.receive_json()
+            assert time.monotonic() - started >= 0.2
+
+
+def _seat_two_bots_and_deal(instructor, bot_one, bot_two):
+    instructor.send_json({"type": "observe"})
+    instructor.receive_json()
+    bot_one.send_json({"type": "join", "name": "Bot One", "player_id": "bot-1"})
+    bot_one.receive_json()
+    instructor.receive_json()
+    bot_two.send_json({"type": "join", "name": "Bot Two", "player_id": "bot-2"})
+    bot_two.receive_json()
+    instructor.receive_json()
+    instructor.send_json({"type": "start_hand"})
+    return instructor.receive_json()["payload"]
+
+
+def test_bots_cannot_pause_the_game():
+    with TestClient(server.app) as client:
+        with client.websocket_connect("/ws") as bot:
+            bot.send_json({"type": "join", "name": "Bot One", "player_id": "bot-1"})
+            bot.receive_json()
+            bot.send_json({"type": "pause"})
+            assert bot.receive_json() == {"type": "error", "message": "Only an instructor observer may pause or resume the game"}
+            assert server.paused is False
+
+
+def test_pause_holds_the_next_turn_until_resume():
+    with TestClient(server.app) as client:
+        with client.websocket_connect("/ws") as instructor, client.websocket_connect("/ws") as bot_one, client.websocket_connect("/ws") as bot_two:
+            state = _seat_two_bots_and_deal(instructor, bot_one, bot_two)
+            sockets = {"bot-1": bot_one, "bot-2": bot_two}
+            actor = state["current_turn"]
+
+            instructor.send_json({"type": "pause"})
+            assert instructor.receive_json()["payload"]["paused"] is True
+
+            # The action itself is accepted, but the state that hands the
+            # turn to the next bot is withheld while paused.
+            sockets[actor].send_json({"type": "action", "action": "call"})
+            while (reply := sockets[actor].receive_json())["type"] != "action_result":
+                pass  # skip join/deal broadcasts still queued on this socket
+            assert reply["payload"]["ok"] is True
+            next_turn = server.engine.current_turn
+            assert next_turn != actor
+
+            started = time.monotonic()
+            time.sleep(0.2)
+            instructor.send_json({"type": "resume"})
+            while True:
+                payload = instructor.receive_json()["payload"]
+                if payload["current_turn"] == next_turn:
+                    break
+            assert payload["paused"] is False
+            assert time.monotonic() - started >= 0.2
+
+
+def test_hands_cannot_start_while_paused():
+    with TestClient(server.app) as client:
+        with client.websocket_connect("/ws") as instructor:
+            instructor.send_json({"type": "observe"})
+            instructor.receive_json()
+            instructor.send_json({"type": "pause"})
+            instructor.receive_json()
+            instructor.send_json({"type": "start_hand"})
+            assert instructor.receive_json() == {"type": "error", "message": "The game is paused; press Continue first"}
 
 
 def test_start_hand_requires_two_players_with_chips():

@@ -22,10 +22,19 @@
       <main class="game-layout">
         <div class="panel waiting-room" id="waiting-room">
           <div class="button-row start-row">
-            <button id="start-hand-button" type="button" disabled>Start One Hand</button>
-            <button id="start-series-button" class="series-button" type="button" disabled>Run 10 Hands</button>
+            <button id="play-button" class="play-button" type="button" aria-pressed="false">Start</button>
           </div>
-          <div id="series-status" class="series-status">Single-hand mode</div>
+          <div id="play-status" class="play-status">Not started</div>
+          <div class="speed-controls">
+            <label class="speed-control">
+              <span class="speed-label">Pause per action <output id="action-delay-value">0.0s</output></span>
+              <input id="action-delay-slider" type="range" min="0" max="3" step="0.1" value="0" />
+            </label>
+            <label class="speed-control">
+              <span class="speed-label">Showdown pause <output id="showdown-reveal-value">3.0s</output></span>
+              <input id="showdown-reveal-slider" type="range" min="0" max="10" step="0.5" value="3" />
+            </label>
+          </div>
         </div>
 
         <div class="table-row">
@@ -49,6 +58,8 @@
         <div id="status-message" class="status-message">Connecting to the Poker AI Final Showdown table…</div>
       </section>
     </div>
+
+    <div id="notifications" class="notifications" aria-live="polite"></div>
 
     <script src="/static/app.js"></script>
   </body>

@@ -69,6 +69,15 @@ def test_short_stack_can_call_all_in_and_side_pot_is_paid_correctly():
 
     game._resolve_showdown()
 
+    # A contested pot holds at SHOWDOWN with cards revealed and stacks
+    # untouched until finalize_showdown() is called.
+    assert game.phase == "SHOWDOWN"
+    assert game.players["p1"].stack == 0
+    own = next(p for p in game.snapshot()["players"] if p["id"] == "p1")
+    assert own["hole_cards"][0]["label"] != "??"
+
+    game.finalize_showdown()
+
     assert game.players["p1"].stack == 150
     assert game.players["p2"].stack == 100
     assert game.players["p3"].stack == 0
@@ -140,3 +149,28 @@ def test_private_snapshots_only_reveal_the_requesting_player_cards():
     opponent = next(player for player in game.snapshot("p1")["players"] if player["id"] == "p2")
     assert own["hole_cards"][0]["label"] != "??"
     assert opponent["hole_cards"][0]["label"] == "??"
+
+
+def test_big_blind_all_in_for_less_than_small_blind_sets_bet_to_small_blind():
+    # Regression: a big blind with fewer chips than the small blind went
+    # all-in short, leaving current_bet below the small blind's bet. The
+    # small blind could then neither check (rejected) nor call (negative
+    # amount), and a check/call bot looped forever on its turn.
+    game = game_with_players(3)
+    game.players["p3"].stack = 4
+    game.start_hand()
+
+    assert game.dealer == "p1"
+    assert game.players["p2"].bet == 10
+    assert game.players["p3"].bet == 4
+    assert game.players["p3"].all_in
+    assert game.current_bet == 10
+
+    assert game.current_turn == "p1"
+    result = game.place_action("p1", "call")
+    assert result["ok"]
+    assert game.players["p1"].bet == 10
+
+    assert game.current_turn == "p2"
+    assert game.place_action("p2", "check")["ok"]
+    assert game.phase == "FLOP"

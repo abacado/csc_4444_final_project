@@ -76,6 +76,10 @@ class PokerEngine:
         self.raise_locked: set[str] = set()
         self.last_action: Optional[dict] = None
         self.hand_number = 0
+        # Set by _resolve_showdown() for a contested pot: the phase holds at
+        # SHOWDOWN with hole cards revealed until finalize_showdown() applies
+        # this payout and reopens the table, giving observers time to react.
+        self.pending_payout: Optional[dict[str, int]] = None
 
     def add_player(self, player_id: str, name: str) -> bool:
         if not player_id or not name:
@@ -172,7 +176,9 @@ class PokerEngine:
             big_blind = self._next_in_hand(self.player_order.index(small_blind))
         self._commit(small_blind, self.small_blind)
         self._commit(big_blind, self.big_blind)
-        self.current_bet = self.players[big_blind].bet
+        # A short-stacked big blind can post less than the small blind, so
+        # the bet to match is whichever blind actually put in more.
+        self.current_bet = max(self.players[small_blind].bet, self.players[big_blind].bet)
         self.current_turn = self._next_actor(self.player_order.index(big_blind))
         self.last_action = {"type": "deal", "dealer": dealer, "small_blind": small_blind, "big_blind": big_blind}
         self._finish_if_ready()
@@ -212,17 +218,19 @@ class PokerEngine:
         return all(self.players[pid].all_in or (pid in self.round_acted and self.players[pid].bet == self.current_bet) for pid in contenders)
 
     def _finish_if_ready(self) -> None:
-        while self.phase != "WAITING" and self._round_complete():
+        while self.phase not in ("WAITING", "SHOWDOWN") and self._round_complete():
             if len([pid for pid in self.player_order if self._in_hand(pid)]) <= 1:
                 self._resolve_showdown()
                 return
             self._advance_phase()
-            if self.phase == "WAITING":
+            if self.phase in ("WAITING", "SHOWDOWN"):
                 return
 
     def place_action(self, player_id: str, action: str, amount: int = 0) -> dict:
         if self.phase == "WAITING":
             return {"ok": False, "error": "No hand is in progress"}
+        if self.phase == "SHOWDOWN":
+            return {"ok": False, "error": "Hand is at showdown; waiting for payout"}
         if player_id != self.current_turn:
             return {"ok": False, "error": "It is not this player's turn"}
         if action not in {"fold", "check", "call", "raise"} or not isinstance(amount, int) or amount < 0:
@@ -270,34 +278,43 @@ class PokerEngine:
 
     def _resolve_showdown(self) -> None:
         contenders = [pid for pid in self.player_order if self._in_hand(pid)]
-        if not contenders:
-            self.phase, self.current_turn = "WAITING", None
+        if len(contenders) <= 1:
+            if contenders:
+                winner = contenders[0]
+                self.players[winner].stack += self.pot
+                self.last_action = {"type": "payout", "winners": [winner], "pot": self.pot}
+            self.pot, self.current_turn, self.phase = 0, None, "WAITING"
             return
-        if len(contenders) == 1:
-            winner = contenders[0]
-            self.players[winner].stack += self.pot
-            self.last_action = {"type": "payout", "winners": [winner], "pot": self.pot}
-        else:
-            scores = {pid: self.evaluate_best_hand(self.players[pid].hole_cards + self.community_cards) for pid in contenders}
-            payouts: dict[str, int] = {}
-            previous = 0
-            for level in sorted({p.hand_contribution for p in self.players.values() if p.hand_contribution}):
-                contributors = [pid for pid, p in self.players.items() if p.hand_contribution >= level]
-                layer = (level - previous) * len(contributors)
-                eligible = [pid for pid in contenders if self.players[pid].hand_contribution >= level]
-                if eligible:
-                    best = max(scores[pid] for pid in eligible)
-                    winners = [pid for pid in eligible if scores[pid] == best]
-                    share, remainder = divmod(layer, len(winners))
-                    for pid in winners:
-                        payouts[pid] = payouts.get(pid, 0) + share
-                    ordered = [pid for pid in self.player_order[self.dealer_index + 1:] + self.player_order[:self.dealer_index + 1] if pid in winners]
-                    for pid in ordered[:remainder]:
-                        payouts[pid] += 1
-                previous = level
-            for pid, amount in payouts.items():
-                self.players[pid].stack += amount
-            self.last_action = {"type": "payout", "winners": list(payouts), "payouts": payouts, "pot": self.pot}
+        scores = {pid: self.evaluate_best_hand(self.players[pid].hole_cards + self.community_cards) for pid in contenders}
+        payouts: dict[str, int] = {}
+        previous = 0
+        for level in sorted({p.hand_contribution for p in self.players.values() if p.hand_contribution}):
+            contributors = [pid for pid, p in self.players.items() if p.hand_contribution >= level]
+            layer = (level - previous) * len(contributors)
+            eligible = [pid for pid in contenders if self.players[pid].hand_contribution >= level]
+            if eligible:
+                best = max(scores[pid] for pid in eligible)
+                winners = [pid for pid in eligible if scores[pid] == best]
+                share, remainder = divmod(layer, len(winners))
+                for pid in winners:
+                    payouts[pid] = payouts.get(pid, 0) + share
+                ordered = [pid for pid in self.player_order[self.dealer_index + 1:] + self.player_order[:self.dealer_index + 1] if pid in winners]
+                for pid in ordered[:remainder]:
+                    payouts[pid] += 1
+            previous = level
+        self.last_action = {"type": "payout", "winners": list(payouts), "payouts": payouts, "pot": self.pot}
+        # A contested pot holds at SHOWDOWN with hole cards revealed and
+        # stacks untouched; finalize_showdown() applies payouts once the
+        # server-side reveal delay elapses.
+        self.pending_payout = payouts
+        self.current_turn, self.phase = None, "SHOWDOWN"
+
+    def finalize_showdown(self) -> None:
+        if self.phase != "SHOWDOWN" or self.pending_payout is None:
+            return
+        for pid, amount in self.pending_payout.items():
+            self.players[pid].stack += amount
+        self.pending_payout = None
         self.pot, self.current_turn, self.phase = 0, None, "WAITING"
 
     @property
@@ -307,7 +324,8 @@ class PokerEngine:
     def snapshot(self, player_id: Optional[str] = None) -> dict:
         players = []
         for pid, p in self.players.items():
-            cards = [c.to_dict() for c in p.hole_cards] if player_id == pid or self.phase == "SHOWDOWN" else [{"rank": "?", "suit": "?", "label": "??"} for _ in p.hole_cards]
+            reveal = player_id == pid or (self.phase == "SHOWDOWN" and not p.folded)
+            cards = [c.to_dict() for c in p.hole_cards] if reveal else [{"rank": "?", "suit": "?", "label": "??"} for _ in p.hole_cards]
             players.append({"id": p.player_id, "name": p.name, "stack": p.stack, "bet": p.bet, "folded": p.folded, "all_in": p.all_in, "connected": p.connected, "hole_cards": cards})
         return {"phase": self.phase, "pot": self.pot, "community_cards": [c.to_dict() for c in self.community_cards], "players": players, "current_turn": self.current_turn, "dealer": self.dealer, "hand_number": self.hand_number, "last_action": self.last_action, "small_blind": self.small_blind, "big_blind": self.big_blind}
 
